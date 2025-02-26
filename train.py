@@ -7,6 +7,43 @@ from tensorflow.keras.preprocessing.image import ImageDataGenerator
 # Import sklearn for dataset loading
 from sklearn.datasets import fetch_openml
 from sklearn.model_selection import train_test_split
+import time
+
+print("TensorFlow version:", tf.__version__)
+print("GPU Available:", tf.config.list_physical_devices('GPU'))
+
+# If you want to see detailed GPU info
+gpus = tf.config.list_physical_devices('GPU')
+if gpus:
+    for gpu in gpus:
+        print("GPU Name:", gpu.name)
+        print("GPU Details:", tf.config.experimental.get_device_details(gpu))
+
+# Add after your existing GPU detection code
+if gpus:
+    print("Setting up GPU memory growth for RTX 3060...")
+    try:
+        # Allow memory growth to prevent TensorFlow from allocating all GPU memory at once
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+        
+        # RTX 3060 specific optimizations
+        # Enable mixed precision training (faster on RTX 30 series)
+        policy = tf.keras.mixed_precision.Policy('mixed_float16')
+        tf.keras.mixed_precision.set_global_policy(policy)
+        print("Mixed precision policy set to:", policy.name)
+        
+        # Set TensorFlow memory allocation to 90% of available GPU memory
+        # This leaves some memory for the system while maximizing what TF can use
+        gpus = tf.config.list_physical_devices('GPU')
+        if gpus:
+            tf.config.set_logical_device_configuration(
+                gpus[0],
+                [tf.config.LogicalDeviceConfiguration(memory_limit=11264)]  # 11GB (90% of 12GB)
+            )
+        print("GPU memory configuration set for RTX 3060")
+    except Exception as e:
+        print(f"Error setting up GPU optimizations: {e}")
 
 def load_existing_model():
     """Try to load an existing model if it exists."""
@@ -36,8 +73,9 @@ def load_training_data():
     
     # Load MNIST dataset for digits using sklearn
     print("Loading MNIST dataset for digits...")
-    mnist = fetch_openml('mnist_784', version=1, parser='auto')
-    mnist_images = mnist.data.to_numpy().reshape(-1, 28, 28, 1) / 255.0
+    mnist = fetch_openml('mnist_784', version=1, parser='liac-arff', as_frame=False)
+    # Since we're using as_frame=False, mnist.data is already a numpy array
+    mnist_images = mnist.data.reshape(-1, 28, 28, 1) / 255.0
     mnist_labels = np.array([char_to_index(str(int(label))) for label in mnist.target])
     
     # Create synthetic data for letters and symbols
@@ -164,6 +202,10 @@ def load_training_data():
 
 def plot_training_history(history):
     """Plot training history."""
+    # Skip plotting when running from web interface
+    if not tf.executing_eagerly():
+        return
+        
     plt.figure(figsize=(12, 4))
     
     # Plot accuracy
@@ -209,13 +251,13 @@ def main(custom_images=None, custom_labels=None):
     # Load or create the model
     model = load_existing_model()
 
-    # Train the model with improved parameters
-    print("Training model...")
+    # Train the model with RTX 3060 optimized parameters
+    print("Training model with RTX 3060 optimizations...")
     history = model.fit(
         x_train, 
         y_train,
         epochs=15,
-        batch_size=64,
+        batch_size=256,  # Increased for RTX 3060 (from 128)
         validation_data=(x_val, y_val),
         verbose=1,
         callbacks=[
@@ -223,6 +265,13 @@ def main(custom_images=None, custom_labels=None):
                 monitor='val_loss',
                 patience=3,
                 restore_best_weights=True
+            ),
+            # Add learning rate scheduler for better training
+            tf.keras.callbacks.ReduceLROnPlateau(
+                monitor='val_loss',
+                factor=0.5,
+                patience=2,
+                min_lr=0.00001
             )
         ]
     )
@@ -237,10 +286,141 @@ def main(custom_images=None, custom_labels=None):
 
     # Save the model
     print("\nSaving model...")
-    model.save('model/handwriting_model.h5')
-    print("Model saved successfully!")
+    # Fix: Use path relative to the project root
+    script_dir = os.path.dirname(os.path.abspath(__file__))  # Get train.py directory
+    project_root = script_dir  # We're already in the project root
+    model_dir = os.path.join(project_root, 'model')
+    os.makedirs(model_dir, exist_ok=True)
+    model_path = os.path.join(model_dir, 'handwriting_model.h5')
+
+    print(f"Attempting to save model to: {model_path}")
+    try:
+        model.save(model_path)
+        print(f"Model saved successfully to {model_path}")
+        # Verify the file exists
+        if os.path.exists(model_path):
+            print(f"Verified: Model file exists at {model_path}")
+            print(f"File size: {os.path.getsize(model_path)} bytes")
+        else:
+            print("Warning: Model file does not exist after saving!")
+    except Exception as e:
+        print(f"Error saving model: {e}")
+        raise
 
     return history
+
+def train_with_callbacks(progress_callback=None):
+    """Train the model with progress callback support."""
+    try:
+        print("Loading training data...")
+        (x_train, y_train), (x_val, y_val), (x_test, y_test) = load_training_data()
+        print(f"Data loaded - Training samples: {len(x_train)}, Validation samples: {len(x_val)}")
+
+        print("Creating model...")
+        model = create_model()
+        
+        # Training parameters
+        epochs = 15  # Changed from 1 to 15 for proper training
+        batch_size = 256  # Increased for RTX 3060
+        steps_per_epoch = len(x_train) // batch_size
+        print(f"Training config - Epochs: {epochs}, Batch size: {batch_size}, Steps per epoch: {steps_per_epoch}")
+
+        # Fix: Use path relative to the project root
+        script_dir = os.path.dirname(os.path.abspath(__file__))  # Get train.py directory
+        project_root = script_dir  # We're already in the project root
+        model_dir = os.path.join(project_root, 'model')
+        os.makedirs(model_dir, exist_ok=True)
+        model_path = os.path.join(model_dir, 'handwriting_model.h5')
+        
+        print(f"Project root: {project_root}")
+        print(f"Model directory: {model_dir}")
+        print(f"Model will be saved to: {model_path}")
+
+        # Define callback with fixed steps
+        class ProgressCallback(tf.keras.callbacks.Callback):
+            def __init__(self, progress_callback, total_epochs, steps_per_epoch):
+                super().__init__()
+                self.progress_callback = progress_callback
+                self.total_epochs = total_epochs
+                self.steps_per_epoch = steps_per_epoch
+                self.start_time = time.time()
+                print(f"ProgressCallback initialized with {total_epochs} epochs and {steps_per_epoch} steps per epoch")
+                
+            def on_epoch_begin(self, epoch, logs=None):
+                self.epoch_start_time = time.time()
+                self.current_epoch = epoch
+                print(f"Starting epoch {epoch + 1}/{self.total_epochs}")
+                
+            def on_batch_end(self, batch, logs=None):
+                if self.progress_callback and self.steps_per_epoch > 0:
+                    time_elapsed = time.time() - self.start_time
+                    progress = (batch + 1) / self.steps_per_epoch * 100
+                    
+                    self.progress_callback(
+                        self.current_epoch,
+                        {
+                            'batch': batch,
+                            'size': batch_size,
+                            'total_samples': len(x_train),
+                            'total_epochs': self.total_epochs,
+                            'epoch_progress': min(100, progress),
+                            'accuracy': logs.get('accuracy', 0),
+                            'loss': logs.get('loss', 0),
+                            'time_elapsed': time_elapsed,
+                            'time_remaining': 0  # We'll estimate this later
+                        }
+                    )
+
+        # Add early stopping and learning rate reduction
+        callbacks = [
+            tf.keras.callbacks.ModelCheckpoint(
+                model_path,
+                monitor='val_loss',
+                save_best_only=True,
+                verbose=1
+            ),
+            tf.keras.callbacks.EarlyStopping(
+                monitor='val_loss',
+                patience=3,
+                restore_best_weights=True
+            ),
+            tf.keras.callbacks.ReduceLROnPlateau(
+                monitor='val_loss',
+                factor=0.5,
+                patience=2,
+                min_lr=0.00001
+            )
+        ]
+        
+        if progress_callback:
+            callbacks.append(ProgressCallback(progress_callback, epochs, steps_per_epoch))
+
+        print("Starting model training...")
+        history = model.fit(
+            x_train, y_train,
+            epochs=epochs,
+            batch_size=batch_size,
+            validation_data=(x_val, y_val),
+            callbacks=callbacks,
+            verbose=1
+        )
+        
+        print("Training completed, evaluating model...")
+        test_loss, test_accuracy = model.evaluate(x_test, y_test, verbose=1)
+        print(f"Test accuracy: {test_accuracy:.4f}")
+        
+        if os.path.exists(model_path):
+            print(f"Model saved successfully at {model_path}")
+            print(f"File size: {os.path.getsize(model_path)} bytes")
+            return True, "Model trained and saved successfully"
+        else:
+            raise Exception("Model file was not created")
+            
+    except Exception as e:
+        print(f"Error during training: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return False, str(e)
 
 if __name__ == "__main__":
     # Example of how to use custom data:

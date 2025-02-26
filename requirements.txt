@@ -1,9 +1,19 @@
-numpy==1.26.4
-tensorflow==2.16.1  # Compatible with Python 3.12, not yet officially supported with Python 3.13
-matplotlib==3.10.0
-scikit-learn==1.6.1
-flask==2.3.3
-pillow==11.1.0
-opencv-python==4.11.0.86
-werkzeug==2.3.7
-setuptools==69.0.2 
+numpy==1.21.0
+tensorflow==2.9.0
+matplotlib==3.4.2
+scikit-learn==0.24.2
+flask==2.0.1
+pillow==8.2.0
+opencv-python==4.5.2.54
+werkzeug==2.0.1
+setuptools==69.0.2
+pandas==2.2.0
+
+# Real-time updates
+flask-socketio==5.3.0
+python-socketio==5.7.2
+python-engineio==4.3.4
+
+# Development tools
+pytest==6.2.5
+flake8==3.9.2 
